@@ -2,15 +2,22 @@
 // Created by neltri on 1/20/24.
 //
 
-#include <functions.h>
+#include <lcd_controller.h>
 #include <LiquidCrystal_I2C.h>
-LiquidCrystal_I2C lcd(0x27, 16, 2);
 
-String currentText = "Need restart";
-
-void changeLcdText(const String &text, String currentText) {
+void LCDController::changeLcdText(const String &text) {
     currentText = text;
     lcd.clear();
     lcd.setCursor(0, 0);
     lcd.print(currentText);
+}
+
+void LCDController::initializeLCD() {
+    lcd.clear();
+    lcd.init();
+    lcd.backlight();
+}
+
+LCDController::LCDController() : lcd(0x27, 16, 2), currentText("Need restart") {
+    // Constructor body (if needed)
 }
