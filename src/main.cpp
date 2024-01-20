@@ -34,7 +34,6 @@ int buttonMode = 0;
 
 bool buttonState = false;
 bool hasResponse = false;
-bool hasSent = false;
 
 // Controllers
 LCDController lcdController;
@@ -162,33 +161,16 @@ void checkMode() {
   }
 }
 
-/**
- * Sets the parts of the hash by copying the characters from the firstHash and secondHash arrays to the hash array.
- *
- * @throws None
- */
-void setPartsOfHash() {
-  for (int character = 0; character < sizeof(firstHash) - 2; character++) {
-    hash[character] = firstHash[character];
-  }
-
-  for (int character = 0; character < sizeof(secondHash) - 2; character++) {
-    hash[(sizeof(hash) / 2) - 1 + character] = secondHash[character];
-  }
-}
-
-bool checkWebSocketConnection() {
-  if (checkWSocket.repeat()) {
+void checkWebSocketConnection() {
+  if (checkWSTimer.repeat()) {
     if (wsClient.available()) {
-      return true;
-    } else {
-      wsClient.connect(WS_URL);
-      lcdController.changeLcdText("WebSocket");
-      return false;
     }
+
+    wsClient.connect(WS_URL);
+    lcdController.changeLcdText("WebSocket");
   }
 
-  return false;
+  lcdController.changeLcdText("Reconnected!");
 }
 
 void updateGTO() {
