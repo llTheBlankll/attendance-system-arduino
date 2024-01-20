@@ -23,15 +23,11 @@ MFRC522 rfid(SS_PIN, RST_PIN);
 MFRC522::MIFARE_Key key;
 MFRC522::StatusCode status;
 websockets::WebsocketsClient wsClient;
-Neotimer checkWSocket(99);
+Neotimer checkWSTimer(99);
 Neotimer faceTimer(500);
 
-byte firstHash[18];
-byte secondHash[18];
 byte hash[34];
-byte blockSize = sizeof(firstHash);
-byte firstHashSize = sizeof(firstHash);
-byte secondHashSize = sizeof(secondHash);
+byte blockSize = 4;
 
 int lastMode = LOW;
 int buttonMode = 0;
@@ -90,7 +86,6 @@ void ws_message_callback(const websockets::WebsocketsMessage &message) {
   }
 
   hasResponse = true;
-  hasSent = false;
 }
 
 void onEventCallback(const websockets::WebsocketsEvent event, const websockets::WebsocketsMessage &message) {
@@ -202,26 +197,21 @@ void updateGTO() {
   }
 }
 
-void loop() {
-  // Websocket client and check websocket connection if it is up.
-  wsClient.poll();
+void WSConnectionCheck() {
   // Checks websocket connection.
   checkWebSocketConnection();
-
-  // Display Face
-  updateGTO();
-
-  // Check if the data was sent successfully.
-  if (hasSent == true) {
-    return;
-  }
 
   // Check if there is a response from the server.
   if (hasResponse == true) {
     hasResponse = false;
-    return;
   }
 
+  wsClient.poll();
+}
+
+void loop() {
+  // Display Face
+  updateGTO();
   // Check if the state of button has changed.
   checkMode();
 
