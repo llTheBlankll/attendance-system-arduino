@@ -17,7 +17,7 @@
 
 #define ssid "PLDTHOMEFIBR9u7w4"
 #define pass "PLDTWIFIkr39h"
-#define WS_URL "ws://roundhouse.proxy.rlwy.net:42552/websocket/scanner"
+#define WS_URL "wss://pshs-attendance-system.up.railway.app/websocket/scanner"
 
 MFRC522 rfid(SS_PIN, RST_PIN);
 MFRC522::MIFARE_Key key;
@@ -80,8 +80,6 @@ void ws_message_callback(const websockets::WebsocketsMessage &message) {
     faceController.faceMode = 1;
   } else if (messageResponse == "Invalid") {
     faceController.faceMode = 3;
-  } else {
-    faceController.faceMode = 1;
   }
 
   hasResponse = true;
