@@ -207,40 +207,29 @@ void loop() {
     return;
   }
 
-  status = rfid.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A, 4, &key, &rfid.uid);
-  if (status == MFRC522::STATUS_OK) {
-    // Read the first hash.
-    status = rfid.MIFARE_Read(4, firstHash, &firstHashSize);
+  // TODO: Make a code that loops the block and retrieve the data of each block.
+  constexpr int fromBlock = 4;
+  constexpr int toBlock = 12;
+  int hashIndex = 0;
 
+  for (int startFromBlock = fromBlock; startFromBlock <= toBlock; startFromBlock++) {
+    status = rfid.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A, startFromBlock, &key, &rfid.uid);
     if (status == MFRC522::STATUS_OK) {
-      // Proceed getting the second hash.
-      status = rfid.MIFARE_Read(5, secondHash, &secondHashSize);
+      byte buffer[blockSize];
+      byte size = sizeof(buffer);
+      status = rfid.MIFARE_Read(startFromBlock, buffer, &size);
       if (status == MFRC522::STATUS_OK) {
-        lcdController.changeLcdText("Processing...");
-        // If success, concatenate firstHash and secondHash to hash variable.
-        setPartsOfHash();
-
-        const String hashString = concatenateBytes(hash, sizeof(hash) - 2);
-        const String jsonData = R"({"mode": ")" + mode + R"(", "hashedLrn": ")" + hashString + "\"}";
-        // Serial.println(jsonData);
-        // Serial.println("Sending to websocket: " + hashString);
-        if (wsClient.send(jsonData)) {
-          hasSent = true;
-          buzzerController.buzz(100);
+        for (byte i = 0; i < 16; i++) {
+          hash[hashIndex + i] = buffer[i];
         }
+
+        hashIndex += blockSize;
       } else {
         lcdController.changeLcdText("Scan again...");
       }
     } else {
-      lcdController.changeLcdText("Scan again...");
-      Serial.println(MFRC522::GetStatusCodeName(status));
+      lcdController.changeLcdText("Too fast!");
     }
-
-    // RESET SIZE, FIXES BUFFER ISSUES
-    firstHashSize = sizeof(firstHash);
-    secondHashSize = sizeof(secondHash);
-  } else {
-    lcdController.changeLcdText("Too fast!");
   }
 
   rfid.PICC_HaltA();
