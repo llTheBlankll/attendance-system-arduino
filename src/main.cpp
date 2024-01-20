@@ -1,19 +1,19 @@
 #include <MFRC522.h>
 #include <SPI.h>
-#include <LiquidCrystal_I2C.h>
 #include <ArduinoWebsockets.h>
 #include <WiFi.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <ArduinoJson.h>
+#include <buzzer_controller.h>
 #include <Wire.h>
 #include <neotimer.h>
 #include <faces.h>
+#include <lcd_controller.h>
 
 #define RST_PIN 0
 #define SS_PIN 5
 #define BUTTON_PIN 32
-#define BUZZER_PIN 15
 #define OLED_RST (-1)
 
 #define ssid "PLDTHOMEFIBR9u7w4"
@@ -27,11 +27,8 @@
 MFRC522 rfid(SS_PIN, RST_PIN);
 MFRC522::MIFARE_Key key;
 MFRC522::StatusCode status;
-LiquidCrystal_I2C lcd(0x27, 16, 2);
 websockets::WebsocketsClient wsClient;
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RST);
-TaskHandle_t displayTask;
-Neotimer buzzTimer(1000);
 Neotimer faceTimer(200);
 Neotimer checkWSocket(100);
 
@@ -53,19 +50,14 @@ bool buttonState = false;
 bool hasResponse = false;
 bool hasSent = false;
 
-String currentText = "Need restart";
+// Controllers
+LCDController lcdController;
+BuzzerController buzzerController;
+
 String mode = "in";
 // enum Faces {IDLE, WELCOME, LATE, INVALID}
 constexpr int allArray_LEN[4] = {16, 20, 14, 13};
 
-
-void changeLcdText(const String &value) {
-    if (currentText != value) {
-        lcd.clear();
-        lcd.print(currentText);
-        currentText = value;
-    }
-}
 
 String byteArrayToString(const byte *array, const byte size) {
     String str = "";
@@ -97,32 +89,17 @@ void ws_message_callback(const websockets::WebsocketsMessage &message) {
     deserializeJson(response, message.data());
     const String messageResponse = response["message"];
 
-    switch (messageResponse) {
-        case "You are LATE":
-            faceMode = 2;
-            break;
-
-        case "You are ONTIME":
-            faceMode = 1;
-            break;
-
-        case "Invalid":
-            faceMode = 3;
-            break;
-
-        case "Already Scanned!":
-            faceMode = 1;
-            break;
-
-        case "Already arrived!":
-            faceMode = 1;
-            break;
-
-        default:
-            faceMode = 1;
+    if (messageResponse == "You are LATE") {
+        faceMode = 2;
+    } else if (messageResponse == "You are ONTIME" || messageResponse == "Already Scanned!" || messageResponse ==
+               "Already Arrived!") {
+        faceMode = 1;
+    } else if (messageResponse == "Invalid") {
+        faceMode = 3;
+    } else {
+        faceMode = 1;
     }
 
-    changeLcdText(messageResponse);
     hasResponse = true;
     hasSent = false;
 }
@@ -131,7 +108,7 @@ void ws_message_callback(const websockets::WebsocketsMessage &message) {
 void displayFace() {
     if (faceTimer.repeat()) {
         if (frameCount == frameStop && faceMode != 0) {
-            changeLcdText("Ready!");
+            lcdController.changeLcdText("Ready!");
             faceMode = 0;
             frameCount = 0;
         }
@@ -144,75 +121,50 @@ void displayFace() {
         }
 
         display.clearDisplay();
+        const unsigned char **faceArray;
+        int faceArraySize;
         switch (faceMode) {
             case 0:
-                if (frame >= sizeof(idle_face_allArray) / 4) {
-                    frame = 0;
-                } else {
-                    display.drawBitmap(0, 0, idle_face_allArray[frame], 128, 32, WHITE);
-                }
+                faceArray = idle_face_allArray;
+                faceArraySize = sizeof(idle_face_allArray) / 4;
                 break;
             case 1:
-                if (frame >= sizeof(welcome_face_allArray) / 4) {
-                    frame = 0;
-                } else {
-                    display.drawBitmap(0, 0, welcome_face_allArray[frame], 128, 32, WHITE);
-                }
+                faceArray = welcome_face_allArray;
+                faceArraySize = sizeof(welcome_face_allArray) / 4;
                 break;
             case 2:
-
-                if (frame >= sizeof(late_face_allArray) / 4) {
-                    frame = 0;
-                } else {
-                    display.drawBitmap(0, 0, late_face_allArray[frame], 128, 32, WHITE);
-                }
+                faceArray = late_face_allArray;
+                faceArraySize = sizeof(late_face_allArray) / 4;
                 break;
             case 3:
-                if (frame >= sizeof(invalid_face_allArray) / 4) {
-                    frame = 0;
-                } else {
-                    Serial.println("Frame: " + String(frame) + ", Size: " + String(sizeof(invalid_face_allArray) / 4));
-                    display.drawBitmap(0, 0, invalid_face_allArray[frame], 128, 32, WHITE);
-                }
+                faceArray = invalid_face_allArray;
+                faceArraySize = sizeof(invalid_face_allArray) / 4;
                 break;
             default:
-                // display.drawBitmap(0, 0, idle_face_allArray[frame], 128, 32, WHITE);
+                faceArray = idle_face_allArray;
+                faceArraySize = sizeof(idle_face_allArray);
                 break;
         }
+
+        if (frame < faceArraySize) {
+            display.drawBitmap(0, 0, faceArray[frame], 128, 32, WHITE);
+        }
+
         display.display();
         frame += 1;
     }
 }
 
-void buzzTimerPoll() {
-    if (buzzTimer.done()) {
-        noTone(BUZZER_PIN);
-        buzzTimer.reset();
-    }
-}
 
-void buzz(int time) {
-    buzzTimer.set(time);
-    buzzTimer.start();
-
-    if (buzzTimer.done()) {
-        noTone(BUZZER_PIN);
-    }
-
-    if (buzzTimer.waiting()) {
-        tone(BUZZER_PIN, 1000);
-    }
-}
-
-void onEventCallback(const websockets::WebsocketsEvent event, const websockets::WebsocketsMessage& message) {
+void onEventCallback(const websockets::WebsocketsEvent event, const websockets::WebsocketsMessage &message) {
     if (event == websockets::WebsocketsEvent::ConnectionClosed) {
         while (wsClient.available() == false) {
-            changeLcdText("Reconnecting...");
+            lcdController.changeLcdText("Reconnecting...");
             wsClient.connect(WS_URL);
             delay(100);
         }
 
-        changeLcdText("Reconnected!");
+        lcdController.changeLcdText("Reconnected!");
     }
 }
 
@@ -223,14 +175,14 @@ void configureWebSockets() {
     wsClient.onMessage(ws_message_callback);
 
     while (wsClient.available() == false) {
-        changeLcdText("Connecting server...");
+        lcdController.changeLcdText("Connecting server...");
         wsClient.connect(WS_URL);
         delay(100);
     }
 }
 
 void setRFIDKey() {
-    for (unsigned char & keyCount : key.keyByte) {
+    for (unsigned char &keyCount: key.keyByte) {
         keyCount = 0xFF;
     }
 }
@@ -241,21 +193,19 @@ void setup() {
     rfid.PCD_Init();
 
     // Initialize Display
-    lcd.clear();
-    lcd.init();
-    lcd.backlight();
     display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+
 
     // CONFIGURE WIFI
     WiFiClass::mode(WIFI_STA);
     WiFi.begin(ssid, pass);
 
     while ((WiFiClass::status() != WL_CONNECTED)) {
-        changeLcdText("Connecting...");
+        lcdController.changeLcdText("Connecting...");
         delay(50);
     }
 
-    changeLcdText("Connected!");
+    lcdController.changeLcdText("Connected!");
     Serial.println(WiFi.localIP());
 
     setRFIDKey();
@@ -263,11 +213,10 @@ void setup() {
 
     // PIN MODE
     pinMode(BUTTON_PIN, INPUT);
-    pinMode(BUZZER_PIN, OUTPUT);
     buttonMode = digitalRead(BUTTON_PIN);
 
     // Test Buzzer
-    buzz(500);
+    buzzerController.buzz(500);
 }
 
 /**
@@ -280,7 +229,7 @@ void checkMode() {
     if (buttonMode) {
         buttonState = !buttonState;
         mode = !buttonState ? "out" : "in";
-        changeLcdText("Check " + String(mode));
+        lcdController.changeLcdText("Check " + String(mode));
         delay(200);
     }
 }
@@ -306,7 +255,7 @@ bool checkWebSocketConnection() {
             return true;
         } else {
             wsClient.connect(WS_URL);
-            changeLcdText("WebSocket");
+            lcdController.changeLcdText("WebSocket");
             return false;
         }
     }
@@ -320,7 +269,7 @@ void loop() {
     checkWebSocketConnection();
 
     // Stop if the buzzer has reached its timer.
-    buzzTimerPoll();
+    buzzerController.buzzTimerPoll();
 
     // Display Face
     displayFace();
@@ -338,12 +287,12 @@ void loop() {
     checkMode();
 
     if (!rfid.PICC_IsNewCardPresent()) {
-        changeLcdText("Processing...");
+        lcdController.changeLcdText("Processing...");
         return;
     }
 
     if (!rfid.PICC_ReadCardSerial()) {
-        changeLcdText("No card found.");
+        lcdController.changeLcdText("No card found.");
         return;
     }
 
@@ -356,34 +305,34 @@ void loop() {
             // Proceed getting the second hash.
             status = rfid.MIFARE_Read(5, secondHash, &secondHashSize);
             if (status == MFRC522::STATUS_OK) {
-                changeLcdText("Processing...");
+                lcdController.changeLcdText("Processing...");
                 // If success, concatenate firstHash and secondHash to hash variable.
                 setPartsOfHash();
 
-                String hashString = concatenateBytes(hash, sizeof(hash) - 2);
-                String jsonData = "{\"mode\": \"" + mode + "\", \"hashedLrn\": \"" + hashString + "\"}";
+                const String hashString = concatenateBytes(hash, sizeof(hash) - 2);
+                const String jsonData = R"({"mode": ")" + mode + R"(", "hashedLrn": ")" + hashString + "\"}";
                 // Serial.println(jsonData);
                 // Serial.println("Sending to websocket: " + hashString);
                 if (wsClient.send(jsonData)) {
                     hasSent = true;
-                    buzz(50);
+                    buzzerController.buzz(50);
                 }
             } else {
-                changeLcdText("Scan again...");
+                lcdController.changeLcdText("Scan again...");
             }
         } else {
-            changeLcdText("Scan again...");
-            Serial.println(rfid.GetStatusCodeName(status));
+            lcdController.changeLcdText("Scan again...");
+            Serial.println(MFRC522::GetStatusCodeName(status));
         }
 
         // RESET SIZE, FIXES BUFFER ISSUES
         firstHashSize = sizeof(firstHash);
         secondHashSize = sizeof(secondHash);
     } else {
-        changeLcdText("Too fast!");
+        lcdController.changeLcdText("Too fast!");
     }
 
     rfid.PICC_HaltA();
     rfid.PCD_StopCrypto1();
-    // changeLcdText("Card scanned!");
+    // lcdController.changeLcdText("Card scanned!");
 }
