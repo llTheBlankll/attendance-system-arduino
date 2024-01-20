@@ -3,33 +3,28 @@
 #include <ArduinoWebsockets.h>
 #include <WiFi.h>
 #include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
 #include <ArduinoJson.h>
-#include <Wire.h>
-#include <faces.h>
+#include <neotimer.h>
+
 #include <lcd_controller.h>
-#include <buzzer_controller.h>
+#include <face_controller.h>
+
+#include "buzzer_controller.h"
 
 #define RST_PIN 0
 #define SS_PIN 5
 #define BUTTON_PIN 32
-#define OLED_RST (-1)
 
 #define ssid "PLDTHOMEFIBR9u7w4"
 #define pass "PLDTWIFIkr39h"
 #define WS_URL "ws://roundhouse.proxy.rlwy.net:42552/websocket/scanner"
-#define SCREEN_WIDTH 128
-#define SCREEN_HEIGHT 32
-#define BITMAP_HEIGHT 128
-#define BITMAP_WIDTH 32
 
 MFRC522 rfid(SS_PIN, RST_PIN);
 MFRC522::MIFARE_Key key;
 MFRC522::StatusCode status;
 websockets::WebsocketsClient wsClient;
-Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RST);
-Neotimer faceTimer(199);
 Neotimer checkWSocket(99);
+Neotimer faceTimer(500);
 
 byte firstHash[18];
 byte secondHash[18];
@@ -40,10 +35,6 @@ byte secondHashSize = sizeof(secondHash);
 
 int lastMode = LOW;
 int buttonMode = 0;
-int faceMode = 0;
-int frame = 0;
-int frameStop = 2;
-int frameCount = 0;
 
 bool buttonState = false;
 bool hasResponse = false;
@@ -52,11 +43,10 @@ bool hasSent = false;
 // Controllers
 LCDController lcdController;
 BuzzerController buzzerController;
+FaceController faceController;
 
 String mode = "in";
 // enum Faces {IDLE, WELCOME, LATE, INVALID}
-constexpr int allArray_LEN[4] = {16, 20, 14, 13};
-
 
 String byteArrayToString(const byte *array, const byte size) {
   String str = "";
@@ -88,72 +78,20 @@ void ws_message_callback(const websockets::WebsocketsMessage &message) {
   deserializeJson(response, message.data());
   const String messageResponse = response["message"];
 
+
   if (messageResponse == "You are LATE") {
-    faceMode = 2;
   } else if (messageResponse == "You are ONTIME" || messageResponse == "Already Scanned!" || messageResponse ==
              "Already Arrived!") {
-    faceMode = 1;
+    faceController.faceMode = 1;
   } else if (messageResponse == "Invalid") {
-    faceMode = 3;
+    faceController.faceMode = 3;
   } else {
-    faceMode = 1;
+    faceController.faceMode = 1;
   }
 
   hasResponse = true;
   hasSent = false;
 }
-
-
-void displayFace() {
-  if (faceTimer.repeat()) {
-    if (frameCount == frameStop && faceMode != 0) {
-      lcdController.changeLcdText("Ready!");
-      faceMode = 0;
-      frameCount = 0;
-    }
-
-    if (frame == allArray_LEN[faceMode] - 1) {
-      frame = 0;
-      if (faceMode != 0) {
-        frameCount += 1;
-      }
-    }
-
-    display.clearDisplay();
-    const unsigned char **faceArray;
-    int faceArraySize;
-    switch (faceMode) {
-      case 0:
-        faceArray = idle_face_allArray;
-        faceArraySize = sizeof(idle_face_allArray) / 4;
-        break;
-      case 1:
-        faceArray = welcome_face_allArray;
-        faceArraySize = sizeof(welcome_face_allArray) / 4;
-        break;
-      case 2:
-        faceArray = late_face_allArray;
-        faceArraySize = sizeof(late_face_allArray) / 4;
-        break;
-      case 3:
-        faceArray = invalid_face_allArray;
-        faceArraySize = sizeof(invalid_face_allArray) / 4;
-        break;
-      default:
-        faceArray = idle_face_allArray;
-        faceArraySize = sizeof(idle_face_allArray);
-        break;
-    }
-
-    if (frame < faceArraySize) {
-      display.drawBitmap(0, 0, faceArray[frame], 128, 32, WHITE);
-    }
-
-    display.display();
-    frame += 1;
-  }
-}
-
 
 void onEventCallback(const websockets::WebsocketsEvent event, const websockets::WebsocketsMessage &message) {
   if (event == websockets::WebsocketsEvent::ConnectionClosed) {
@@ -191,15 +129,11 @@ void setup() {
   SPI.begin();
   rfid.PCD_Init();
 
-  // Initialize Display
-  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
-
-
   // CONFIGURE WIFI
   WiFiClass::mode(WIFI_STA);
   WiFi.begin(ssid, pass);
 
-  while ((WiFiClass::status() != WL_CONNECTED)) {
+  while (WiFiClass::status() != WL_CONNECTED) {
     lcdController.changeLcdText("Connecting...");
     delay(50);
   }
@@ -215,7 +149,7 @@ void setup() {
   buttonMode = digitalRead(BUTTON_PIN);
 
   // Test Buzzer
-  buzzerController.buzz(500);
+  buzzerController.buzz(1000);
 }
 
 /**
@@ -262,21 +196,27 @@ bool checkWebSocketConnection() {
   return false;
 }
 
+void updateGTO() {
+  if (faceTimer.repeat()) {
+    faceController.displayFace();
+  }
+}
+
 void loop() {
   // Websocket client and check websocket connection if it is up.
   wsClient.poll();
+  // Checks websocket connection.
   checkWebSocketConnection();
 
-  // Stop if the buzzer has reached its timer.
-  buzzerController.buzzTimerPoll();
-
   // Display Face
-  displayFace();
+  updateGTO();
 
+  // Check if the data was sent successfully.
   if (hasSent == true) {
     return;
   }
 
+  // Check if there is a response from the server.
   if (hasResponse == true) {
     hasResponse = false;
     return;
@@ -295,7 +235,7 @@ void loop() {
     return;
   }
 
-  status = rfid.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A, 4, &key, &(rfid.uid));
+  status = rfid.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A, 4, &key, &rfid.uid);
   if (status == MFRC522::STATUS_OK) {
     // Read the first hash.
     status = rfid.MIFARE_Read(4, firstHash, &firstHashSize);
@@ -314,7 +254,7 @@ void loop() {
         // Serial.println("Sending to websocket: " + hashString);
         if (wsClient.send(jsonData)) {
           hasSent = true;
-          buzzerController.buzz(50);
+          buzzerController.buzz(100);
         }
       } else {
         lcdController.changeLcdText("Scan again...");
