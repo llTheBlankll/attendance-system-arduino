@@ -9,7 +9,6 @@
 #include <LiquidCrystal_I2C.h>
 
 class LCDController {
-
 public:
     LCDController();
 
