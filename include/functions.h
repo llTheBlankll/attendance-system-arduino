@@ -4,7 +4,8 @@
 
 #ifndef FUNCTIONS_H
 #define FUNCTIONS_H
+#include <Arduino.h>
 
-void changeLcdText()
+void changeLcdText(const String &text, String currentText);
 
 #endif //FUNCTIONS_H
